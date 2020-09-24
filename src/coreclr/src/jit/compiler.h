@@ -380,11 +380,14 @@ public:
         _lvOtherArgReg(REG_STK)
         ,
 #endif // FEATURE_MULTIREG_ARGS
+        lvClassHnd(NO_CLASS_HANDLE)
+        ,
 #if ASSERTION_PROP
         lvRefBlks(BlockSetOps::UninitVal())
         ,
 #endif // ASSERTION_PROP
         lvPerSsaData()
+
     {
     }
 
@@ -858,7 +861,29 @@ public:
 
     typeInfo lvVerTypeInfo; // type info needed for verification
 
-    CORINFO_CLASS_HANDLE lvClassHnd; // class handle for the local, or null if not known
+    // class handle for the local or null if not known or not a class,
+    // for a struct handle use `GetStructHnd()`.
+    CORINFO_CLASS_HANDLE lvClassHnd;
+
+    // Get class handle for a struct local or implicitByRef struct local.
+    CORINFO_CLASS_HANDLE GetStructHnd() const
+    {
+#ifdef FEATURE_SIMD
+        if (lvSIMDType && (m_layout == nullptr))
+        {
+            return NO_CLASS_HANDLE;
+        }
+#endif
+        assert(m_layout != nullptr);
+#if defined(TARGET_AMD64) || defined(TARGET_ARM64)
+        assert(varTypeIsStruct(TypeGet()) || (lvIsImplicitByRef && (TypeGet() == TYP_BYREF)));
+#else
+        assert(varTypeIsStruct(TypeGet()));
+#endif
+        CORINFO_CLASS_HANDLE structHnd = m_layout->GetClassHandle();
+        assert(structHnd != NO_CLASS_HANDLE);
+        return structHnd;
+    }
 
     CORINFO_FIELD_HANDLE lvFieldHnd; // field handle for promoted struct fields
 
@@ -942,6 +967,7 @@ public:
     void SetLayout(ClassLayout* layout)
     {
         assert(varTypeIsStruct(lvType));
+        assert((m_layout == nullptr) || ClassLayout::AreCompatible(m_layout, layout));
         m_layout = layout;
     }
 
@@ -1452,13 +1478,13 @@ public:
     CorInfoHFAElemType _hfaElemKind : 3; // What kind of an HFA this is (CORINFO_HFA_ELEM_NONE if it is not an HFA).
 #endif
 
-    bool isLateArg()
+    bool isLateArg() const
     {
         bool isLate = (_lateArgInx != UINT_MAX);
         return isLate;
     }
 
-    unsigned GetLateArgInx()
+    unsigned GetLateArgInx() const
     {
         assert(isLateArg());
         return _lateArgInx;
@@ -1467,12 +1493,12 @@ public:
     {
         _lateArgInx = inx;
     }
-    regNumber GetRegNum()
+    regNumber GetRegNum() const
     {
         return (regNumber)regNums[0];
     }
 
-    regNumber GetOtherRegNum()
+    regNumber GetOtherRegNum() const
     {
         return (regNumber)regNums[1];
     }
@@ -1492,7 +1518,7 @@ public:
         return (regNumber)regNums[i];
     }
 
-    bool IsSplit()
+    bool IsSplit() const
     {
 #ifdef FEATURE_ARG_SPLIT
         return _isSplit;
@@ -1507,7 +1533,7 @@ public:
 #endif
     }
 
-    bool IsVararg()
+    bool IsVararg() const
     {
 #ifdef FEATURE_VARARG
         return _isVararg;
@@ -1522,7 +1548,7 @@ public:
 #endif // FEATURE_VARARG
     }
 
-    bool IsHfaArg()
+    bool IsHfaArg() const
     {
 #ifdef FEATURE_HFA
         return IsHfa(_hfaElemKind);
@@ -1531,7 +1557,7 @@ public:
 #endif
     }
 
-    bool IsHfaRegArg()
+    bool IsHfaRegArg() const
     {
 #ifdef FEATURE_HFA
         return IsHfa(_hfaElemKind) && isPassedInRegisters();
@@ -1540,7 +1566,7 @@ public:
 #endif
     }
 
-    unsigned intRegCount()
+    unsigned intRegCount() const
     {
 #if defined(UNIX_AMD64_ABI)
         if (this->isStruct)
@@ -1557,7 +1583,7 @@ public:
         return 0;
     }
 
-    unsigned floatRegCount()
+    unsigned floatRegCount() const
     {
 #if defined(UNIX_AMD64_ABI)
         if (this->isStruct)
@@ -1574,12 +1600,12 @@ public:
         return 0;
     }
 
-    unsigned stackSize()
+    unsigned stackSize() const
     {
         return (TARGET_POINTER_SIZE * this->numSlots);
     }
 
-    var_types GetHfaType()
+    var_types GetHfaType() const
     {
 #ifdef FEATURE_HFA
         return HfaTypeFromElemKind(_hfaElemKind);
@@ -1655,12 +1681,12 @@ public:
     }
 #endif // !TARGET_ARM
 
-    bool isPassedInRegisters()
+    bool isPassedInRegisters() const
     {
         return !IsSplit() && (numRegs != 0);
     }
 
-    bool isPassedInFloatRegisters()
+    bool isPassedInFloatRegisters() const
     {
 #ifdef TARGET_X86
         return false;
@@ -1669,14 +1695,14 @@ public:
 #endif
     }
 
-    bool isSingleRegOrSlot()
+    bool isSingleRegOrSlot() const
     {
         return !IsSplit() && ((numRegs == 1) || (numSlots == 1));
     }
 
     // Returns the number of "slots" used, where for this purpose a
     // register counts as a slot.
-    unsigned getSlotCount()
+    unsigned getSlotCount() const
     {
         if (isBackFilled)
         {
@@ -1697,7 +1723,7 @@ public:
 
     // Returns the size as a multiple of pointer-size.
     // For targets without HFAs, this is the same as getSlotCount().
-    unsigned getSize()
+    unsigned getSize() const
     {
         unsigned size = getSlotCount();
 #ifdef FEATURE_HFA
@@ -1766,7 +1792,7 @@ public:
     // - A node of a scalar type, passed in a single register or slot
     //   (or two slots in the case of a struct pass on the stack as TYP_DOUBLE).
     //
-    void checkIsStruct()
+    void checkIsStruct() const
     {
         GenTree* node = GetNode();
         if (isStruct)
@@ -1796,7 +1822,7 @@ public:
     }
 
 #ifdef DEBUG
-    void Dump();
+    void Dump() const;
 #endif
 };
 
@@ -1888,27 +1914,27 @@ public:
 
     void EvalArgsToTemps();
 
-    unsigned ArgCount()
+    unsigned ArgCount() const
     {
         return argCount;
     }
-    fgArgTabEntry** ArgTable()
+    fgArgTabEntry** ArgTable() const
     {
         return argTable;
     }
-    unsigned GetNextSlotNum()
+    unsigned GetNextSlotNum() const
     {
         return nextSlotNum;
     }
-    bool HasRegArgs()
+    bool HasRegArgs() const
     {
         return hasRegArgs;
     }
-    bool NeedsTemps()
+    bool NeedsTemps() const
     {
         return needsTemps;
     }
-    bool HasStackArgs()
+    bool HasStackArgs() const
     {
         return hasStackArgs;
     }
@@ -1933,7 +1959,7 @@ public:
         padStkAlign = AlignmentPad(curStackLevelInBytes, STACK_ALIGN);
     }
 
-    unsigned GetStkAlign()
+    unsigned GetStkAlign() const
     {
         return padStkAlign;
     }
@@ -1960,7 +1986,7 @@ public:
 #endif // defined(UNIX_X86_ABI)
 
     // Get the fgArgTabEntry for the arg at position argNum.
-    fgArgTabEntry* GetArgEntry(unsigned argNum, bool reMorphing = true)
+    fgArgTabEntry* GetArgEntry(unsigned argNum, bool reMorphing = true) const
     {
         fgArgTabEntry* curArgTabEntry = nullptr;
 
@@ -1986,12 +2012,12 @@ public:
 
     // Get the node for the arg at position argIndex.
     // Caller must ensure that this index is a valid arg index.
-    GenTree* GetArgNode(unsigned argIndex)
+    GenTree* GetArgNode(unsigned argIndex) const
     {
         return GetArgEntry(argIndex)->GetNode();
     }
 
-    void Dump(Compiler* compiler);
+    void Dump(Compiler* compiler) const;
 };
 
 #ifdef DEBUG
@@ -2701,6 +2727,8 @@ public:
 
     GenTree* gtNewNullCheck(GenTree* addr, BasicBlock* basicBlock);
 
+    void gtChangeOperToNullCheck(GenTree* tree, BasicBlock* block);
+
     GenTreeArgList* gtNewArgList(GenTree* op);
     GenTreeArgList* gtNewArgList(GenTree* op1, GenTree* op2);
     GenTreeArgList* gtNewArgList(GenTree* op1, GenTree* op2, GenTree* op3);
@@ -3321,7 +3349,7 @@ public:
         return &lvaTable[lclNum];
     }
 
-    LclVarDsc* lvaGetDesc(GenTreeLclVarCommon* lclVar)
+    LclVarDsc* lvaGetDesc(const GenTreeLclVarCommon* lclVar)
     {
         assert(lclVar->GetLclNum() < lvaCount);
         return &lvaTable[lclVar->GetLclNum()];
@@ -3726,6 +3754,7 @@ protected:
 
     void impImportLeave(BasicBlock* block);
     void impResetLeaveBlock(BasicBlock* block, unsigned jmpAddr);
+    GenTree* impTypeIsAssignable(GenTree* typeTo, GenTree* typeFrom);
     GenTree* impIntrinsic(GenTree*                newobjThis,
                           CORINFO_CLASS_HANDLE    clsHnd,
                           CORINFO_METHOD_HANDLE   method,
@@ -3741,7 +3770,7 @@ protected:
     GenTree* impMathIntrinsic(CORINFO_METHOD_HANDLE method,
                               CORINFO_SIG_INFO*     sig,
                               var_types             callType,
-                              CorInfoIntrinsics     intrinsicID,
+                              NamedIntrinsic        intrinsicName,
                               bool                  tailCall);
     NamedIntrinsic lookupNamedIntrinsic(CORINFO_METHOD_HANDLE method);
     GenTree* impUnsupportedNamedIntrinsic(unsigned              helper,
@@ -3937,9 +3966,9 @@ public:
     bool VarTypeIsMultiByteAndCanEnreg(
         var_types type, CORINFO_CLASS_HANDLE typeClass, unsigned* typeSize, bool forReturn, bool isVarArg);
 
-    bool IsIntrinsicImplementedByUserCall(CorInfoIntrinsics intrinsicId);
-    bool IsTargetIntrinsic(CorInfoIntrinsics intrinsicId);
-    bool IsMathIntrinsic(CorInfoIntrinsics intrinsicId);
+    bool IsIntrinsicImplementedByUserCall(NamedIntrinsic intrinsicName);
+    bool IsTargetIntrinsic(NamedIntrinsic intrinsicName);
+    bool IsMathIntrinsic(NamedIntrinsic intrinsicName);
     bool IsMathIntrinsic(GenTree* tree);
 
 private:
@@ -4633,6 +4662,9 @@ public:
 
     void fgComputeLifeLIR(VARSET_TP& life, BasicBlock* block, VARSET_VALARG_TP volatileVars);
 
+    bool fgTryRemoveNonLocal(GenTree* node, LIR::Range* blockRange);
+
+    void fgRemoveDeadStoreLIR(GenTree* store, BasicBlock* block);
     bool fgRemoveDeadStore(GenTree**        pTree,
                            LclVarDsc*       varDsc,
                            VARSET_VALARG_TP life,
@@ -4964,7 +4996,7 @@ protected:
 
     // When the flow graph changes, we need to update the block numbers, predecessor lists, reachability sets, and
     // dominators.
-    void fgUpdateChangedFlowGraph();
+    void fgUpdateChangedFlowGraph(bool computeDoms = true);
 
 public:
     // Compute the predecessors of the blocks in the control flow graph.
@@ -5263,8 +5295,10 @@ public:
     void fgDebugCheckNodesUniqueness();
 
     void fgDebugCheckFlags(GenTree* tree);
+    void fgDebugCheckDispFlags(GenTree* tree, unsigned dispFlags, unsigned debugFlags);
     void fgDebugCheckFlagsHelper(GenTree* tree, unsigned treeFlags, unsigned chkFlags);
     void fgDebugCheckTryFinallyExits();
+    void fgDebugCheckProfileData();
 #endif
 
     static GenTree* fgGetFirstNode(GenTree* tree);
@@ -5378,6 +5412,7 @@ protected:
     }
 
     bool fgHaveProfileData();
+    void fgComputeProfileScale();
     bool fgGetProfileWeightForBasicBlock(IL_OFFSET offset, unsigned* weight);
     void fgInstrumentMethod();
 
@@ -5571,7 +5606,6 @@ private:
     GenTree* fgCreateCallDispatcherAndGetResult(GenTreeCall*          origCall,
                                                 CORINFO_METHOD_HANDLE callTargetStubHnd,
                                                 CORINFO_METHOD_HANDLE dispatcherHnd);
-    GenTree* getMethodPointerTree(CORINFO_RESOLVED_TOKEN* pResolvedToken, CORINFO_CALL_INFO* pCallInfo);
     GenTree* getLookupTree(CORINFO_RESOLVED_TOKEN* pResolvedToken,
                            CORINFO_LOOKUP*         pLookup,
                            unsigned                handleFlags,
@@ -6326,11 +6360,12 @@ protected:
 
     struct CSEdsc
     {
-        CSEdsc* csdNextInBucket; // used by the hash table
-
-        unsigned csdHashKey; // the orginal hashkey
-
-        unsigned csdIndex; // 1..optCSECandidateCount
+        CSEdsc*  csdNextInBucket;  // used by the hash table
+        size_t   csdHashKey;       // the orginal hashkey
+        ssize_t  csdConstDefValue; // When we CSE similar constants, this is the value that we use as the def
+        ValueNum csdConstDefVN;    // When we CSE similar constants, this is the ValueNumber that we use for the LclVar
+                                   // assignment
+        unsigned csdIndex;         // 1..optCSECandidateCount
         bool     csdLiveAcrossCall;
 
         unsigned short csdDefCount; // definition   count
@@ -6359,9 +6394,15 @@ protected:
 
         ValueNum defConservNormVN; // if all def occurrences share the same conservative normal value
                                    // number, this will reflect it; otherwise, NoVN.
+                                   // not used for shared const CSE's
     };
 
-    static const size_t s_optCSEhashSize;
+    static const size_t s_optCSEhashSizeInitial;
+    static const size_t s_optCSEhashGrowthFactor;
+    static const size_t s_optCSEhashBucketSize;
+    size_t              optCSEhashSize;                 // The current size of hashtable
+    size_t              optCSEhashCount;                // Number of entries in hashtable
+    size_t              optCSEhashMaxCountBeforeResize; // Number of entries before resize
     CSEdsc**            optCSEhash;
     CSEdsc**            optCSEtab;
 
@@ -6405,6 +6446,16 @@ protected:
 #ifdef DEBUG
     void optEnsureClearCSEInfo();
 #endif // DEBUG
+
+    static bool Is_Shared_Const_CSE(size_t key)
+    {
+        return ((key & TARGET_SIGN_BIT) != 0);
+    }
+
+    static size_t Decode_Shared_Const_CSE_Value(size_t key)
+    {
+        return (key & ~TARGET_SIGN_BIT) << CSE_CONST_SHARED_LOW_BITS;
+    }
 
 #endif // FEATURE_ANYCSE
 
@@ -6487,7 +6538,7 @@ public:
     void optCopyProp(BasicBlock* block, Statement* stmt, GenTree* tree, LclNumToGenTreePtrStack* curSsaName);
     void optBlockCopyPropPopStacks(BasicBlock* block, LclNumToGenTreePtrStack* curSsaName);
     void optBlockCopyProp(BasicBlock* block, LclNumToGenTreePtrStack* curSsaName);
-    bool optIsSsaLocal(GenTree* tree);
+    unsigned optIsSsaLocal(GenTree* tree);
     int optCopyProp_LclVarScore(LclVarDsc* lclVarDsc, LclVarDsc* copyVarDsc, bool preferOp2);
     void optVnCopyProp();
     INDEBUG(void optDumpCopyPropStack(LclNumToGenTreePtrStack* curSsaName));
@@ -8010,7 +8061,7 @@ private:
         {
             return false;
         }
-        return isOpaqueSIMDType(varDsc->lvVerTypeInfo.GetClassHandle());
+        return isOpaqueSIMDType(varDsc->GetStructHnd());
     }
 
     static bool isRelOpSIMDIntrinsic(SIMDIntrinsicID intrinsicId)
@@ -8190,7 +8241,7 @@ private:
 #if defined(TARGET_XARCH)
         if (getSIMDSupportLevel() == SIMD_AVX2_Supported)
         {
-            return TYP_SIMD32;
+            return JitConfig.EnableHWIntrinsic() ? TYP_SIMD32 : TYP_SIMD16;
         }
         else
         {
@@ -8231,7 +8282,7 @@ private:
 #if defined(TARGET_XARCH)
         if (getSIMDSupportLevel() == SIMD_AVX2_Supported)
         {
-            return YMM_REGSIZE_BYTES;
+            return JitConfig.EnableHWIntrinsic() ? YMM_REGSIZE_BYTES : XMM_REGSIZE_BYTES;
         }
         else
         {
@@ -8261,7 +8312,7 @@ private:
 #if defined(FEATURE_HW_INTRINSICS) && defined(TARGET_XARCH)
         if (compOpportunisticallyDependsOn(InstructionSet_AVX))
         {
-            return YMM_REGSIZE_BYTES;
+            return JitConfig.EnableHWIntrinsic() ? YMM_REGSIZE_BYTES : XMM_REGSIZE_BYTES;
         }
         else
         {
@@ -8802,8 +8853,7 @@ public:
         bool doLateDisasm; // Run the late disassembler
 #endif                     // LATE_DISASM
 
-#if DUMP_GC_TABLES && !defined(DEBUG) && defined(JIT32_GCENCODER)
-// Only the JIT32_GCENCODER implements GC dumping in non-DEBUG code.
+#if DUMP_GC_TABLES && !defined(DEBUG)
 #pragma message("NOTE: this non-debug build has GC ptr table dumping always enabled!")
         static const bool dspGCtbls = true;
 #endif
@@ -9001,7 +9051,7 @@ public:
     {
 #if 0
         // Switching between size & speed has measurable throughput impact
-        // (3.5% on NGen mscorlib when measured). It used to be enabled for
+        // (3.5% on NGen CoreLib when measured). It used to be enabled for
         // DEBUG, but should generate identical code between CHK & RET builds,
         // so that's not acceptable.
         // TODO-Throughput: Figure out what to do about size vs. speed & throughput.
@@ -9067,7 +9117,7 @@ public:
         bool compIsVarArgs : 1;          // Does the method have varargs parameters?
         bool compInitMem : 1;            // Is the CORINFO_OPT_INIT_LOCALS bit set in the method info options?
         bool compProfilerCallback : 1;   // JIT inserted a profiler Enter callback
-        bool compPublishStubParam : 1;   // EAX captured in prolog will be available through an instrinsic
+        bool compPublishStubParam : 1;   // EAX captured in prolog will be available through an intrinsic
         bool compRetBuffDefStack : 1;    // The ret buff argument definitely points into the stack.
         bool compHasNextCallRetAddr : 1; // The NextCallReturnAddress intrinsic is used.
 

@@ -6549,6 +6549,7 @@ void Compiler::optHoistThisLoop(unsigned lnum, LoopHoistContext* hoistCtxt)
     {
         printf("optHoistLoopCode for loop L%02u <" FMT_BB ".." FMT_BB ">:\n", lnum, begn, endn);
         printf("  Loop body %s a call\n", pLoopDsc->lpContainsCall ? "contains" : "does not contain");
+        printf("  Loop has %s\n", (pLoopDsc->lpFlags & LPFLG_ONE_EXIT) ? "single exit" : "multiple exits");
     }
 #endif
 
@@ -7920,10 +7921,11 @@ bool Compiler::optComputeLoopSideEffectsOfBlock(BasicBlock* blk)
                         }
                         break;
 
-                    case GT_LOCKADD: // Binop
-                    case GT_XADD:    // Binop
-                    case GT_XCHG:    // Binop
-                    case GT_CMPXCHG: // Specialop
+                    case GT_LOCKADD:
+                    case GT_XADD:
+                    case GT_XCHG:
+                    case GT_CMPXCHG:
+                    case GT_MEMORYBARRIER:
                     {
                         assert(!tree->OperIs(GT_LOCKADD) && "LOCKADD should not appear before lowering");
                         memoryHavoc |= memoryKindSet(GcHeap, ByrefExposed);

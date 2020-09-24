@@ -99,6 +99,7 @@ CONFIG_INTEGER(JitPInvokeCheckEnabled, W("JITPInvokeCheckEnabled"), 0)
 CONFIG_INTEGER(JitPInvokeEnabled, W("JITPInvokeEnabled"), 1)
 CONFIG_METHODSET(JitPrintInlinedMethods, W("JitPrintInlinedMethods"))
 CONFIG_METHODSET(JitPrintDevirtualizedMethods, W("JitPrintDevirtualizedMethods"))
+CONFIG_INTEGER(JitProfileChecks, W("JitProfileChecks"), 0) // 1 enable in dumps, 2 assert if issues found
 CONFIG_INTEGER(JitRequired, W("JITRequired"), -1)
 CONFIG_INTEGER(JitRoundFloat, W("JITRoundFloat"), DEFAULT_ROUND_LEVEL)
 CONFIG_INTEGER(JitStackAllocToLocalSize, W("JitStackAllocToLocalSize"), DEFAULT_MAX_LOCALLOC_TO_LOCAL_SIZE)
@@ -284,6 +285,20 @@ CONFIG_INTEGER(JitDisableSimdVN, W("JitDisableSimdVN"), 0) // Default 0, ValueNu
                                                            // If 2, then disable ValueNumbering of HW Intrinsic nodes
                                                            // If 3, disable both SIMD and HW Intrinsic nodes
 #endif                                                     // FEATURE_SIMD
+
+// Default 0, enable the CSE of Constants, including nearby offsets. (only for ARM64)
+// If 1, disable all the CSE of Constants
+// If 2, enable the CSE of Constants but don't combine with nearby offsets. (only for ARM64)
+// If 3, enable the CSE of Constants including nearby offsets. (all platforms)
+// If 4, enable the CSE of Constants but don't combine with nearby offsets. (all platforms)
+//
+CONFIG_INTEGER(JitConstCSE, W("JitConstCSE"), 0)
+
+#define CONST_CSE_ENABLE_ARM64 0
+#define CONST_CSE_DISABLE_ALL 1
+#define CONST_CSE_ENABLE_ARM64_NO_SHARING 2
+#define CONST_CSE_ENABLE_ALL 3
+#define CONST_CSE_ENABLE_ALL_NO_SHARING 4
 
 ///
 /// JIT

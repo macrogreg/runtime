@@ -585,7 +585,7 @@ GenTree* Lowering::LowerSwitch(GenTree* node)
     // I think this is due to the fact that we use absolute addressing
     // instead of relative. But in CoreRT is used as a rule relative
     // addressing when we generate an executable.
-    // See also https://github.com/dotnet/coreclr/issues/13194
+    // See also https://github.com/dotnet/runtime/issues/8683
     // Also https://github.com/dotnet/coreclr/pull/13197
     useJumpSequence = useJumpSequence || comp->IsTargetAbi(CORINFO_CORERT_ABI);
 #endif // defined(TARGET_UNIX) && defined(TARGET_ARM)
@@ -2991,7 +2991,7 @@ void Lowering::LowerRet(GenTreeUnOp* ret)
             ReturnTypeDesc retTypeDesc;
             LclVarDsc*     varDsc = nullptr;
             varDsc                = comp->lvaGetDesc(retVal->AsLclVar()->GetLclNum());
-            retTypeDesc.InitializeStructReturnType(comp, varDsc->lvVerTypeInfo.GetClassHandle());
+            retTypeDesc.InitializeStructReturnType(comp, varDsc->GetStructHnd());
             if (retTypeDesc.GetReturnRegCount() > 1)
             {
                 CheckMultiRegLclVar(retVal->AsLclVar(), &retTypeDesc);
@@ -3181,7 +3181,9 @@ void Lowering::LowerStoreLocCommon(GenTreeLclVarCommon* lclStore)
             // Create the assignment node.
             lclStore->ChangeOper(GT_STORE_OBJ);
             GenTreeBlk* objStore = lclStore->AsObj();
-            objStore->gtFlags    = GTF_ASG | GTF_IND_NONFAULTING | GTF_IND_TGT_NOT_HEAP;
+            // Only the GTF_LATE_ARG flag (if present) is preserved.
+            objStore->gtFlags &= GTF_LATE_ARG;
+            objStore->gtFlags |= GTF_ASG | GTF_IND_NONFAULTING | GTF_IND_TGT_NOT_HEAP;
 #ifndef JIT32_GCENCODER
             objStore->gtBlkOpGcUnsafe = false;
 #endif
@@ -3689,10 +3691,17 @@ GenTree* Lowering::LowerDirectCall(GenTreeCall* call)
             // Non-virtual direct calls to addresses accessed by
             // a double indirection.
             //
-            // Double-indirection. Load the address into a register
-            // and call indirectly through the register
+
+            // Expanding an IAT_PPVALUE here, will lose the opportunity
+            // to Hoist/CSE the first indirection as it is an invariant load
+            //
+            assert(!"IAT_PPVALUE case in LowerDirectCall");
+
             noway_assert(helperNum == CORINFO_HELP_UNDEF);
             result = AddrGen(addr);
+            // Double-indirection. Load the address into a register
+            // and call indirectly through the register
+            //
             result = Ind(Ind(result));
             break;
 
@@ -4486,10 +4495,20 @@ GenTree* Lowering::LowerNonvirtPinvokeCall(GenTreeCall* call)
                 break;
 
             case IAT_PPVALUE:
+                // ToDo:  Expanding an IAT_PPVALUE here, loses the opportunity
+                // to Hoist/CSE the first indirection as it is an invariant load
+                //
+                // This case currently occurs today when we make PInvoke calls in crossgen
+                //
+                // assert(!"IAT_PPVALUE in Lowering::LowerNonvirtPinvokeCall");
+
                 addrTree = AddrGen(addr);
 #ifdef DEBUG
                 addrTree->AsIntCon()->gtTargetHandle = (size_t)methHnd;
 #endif
+                // Double-indirection. Load the address into a register
+                // and call indirectly through the register
+                //
                 result = Ind(Ind(addrTree));
                 break;
 
@@ -6450,41 +6469,7 @@ void Lowering::LowerIndir(GenTreeIndir* ind)
 
         if (ind->OperIs(GT_NULLCHECK) || ind->IsUnusedValue())
         {
-            // A nullcheck is essentially the same as an indirection with no use.
-            // The difference lies in whether a target register must be allocated.
-            // On XARCH we can generate a compare with no target register as long as the addresss
-            // is not contained.
-            // On ARM64 we can generate a load to REG_ZR in all cases.
-            // However, on ARM we must always generate a load to a register.
-            // In the case where we require a target register, it is better to use GT_IND, since
-            // GT_NULLCHECK is a non-value node and would therefore require an internal register
-            // to use as the target. That is non-optimal because it will be modeled as conflicting
-            // with the source register(s).
-            // So, to summarize:
-            // - On ARM64, always use GT_NULLCHECK for a dead indirection.
-            // - On ARM, always use GT_IND.
-            // - On XARCH, use GT_IND if we have a contained address, and GT_NULLCHECK otherwise.
-            // In all cases, change the type to TYP_INT.
-            //
-            ind->gtType = TYP_INT;
-#ifdef TARGET_ARM64
-            bool useNullCheck = true;
-#elif TARGET_ARM
-            bool useNullCheck = false;
-#else  // TARGET_XARCH
-            bool useNullCheck = !ind->Addr()->isContained();
-#endif // !TARGET_XARCH
-
-            if (useNullCheck && ind->OperIs(GT_IND))
-            {
-                ind->ChangeOper(GT_NULLCHECK);
-                ind->ClearUnusedValue();
-            }
-            else if (!useNullCheck && ind->OperIs(GT_NULLCHECK))
-            {
-                ind->ChangeOper(GT_IND);
-                ind->SetUnusedValue();
-            }
+            TransformUnusedIndirection(ind, comp, m_block);
         }
     }
     else
@@ -6493,6 +6478,55 @@ void Lowering::LowerIndir(GenTreeIndir* ind)
         // is a complex one it could benefit from an `LEA` that is not contained.
         const bool isContainable = false;
         TryCreateAddrMode(ind->Addr(), isContainable);
+    }
+}
+
+//------------------------------------------------------------------------
+// TransformUnusedIndirection: change the opcode and the type of the unused indirection.
+//
+// Arguments:
+//    ind   - Indirection to transform.
+//    comp  - Compiler instance.
+//    block - Basic block of the indirection.
+//
+void Lowering::TransformUnusedIndirection(GenTreeIndir* ind, Compiler* comp, BasicBlock* block)
+{
+    // A nullcheck is essentially the same as an indirection with no use.
+    // The difference lies in whether a target register must be allocated.
+    // On XARCH we can generate a compare with no target register as long as the addresss
+    // is not contained.
+    // On ARM64 we can generate a load to REG_ZR in all cases.
+    // However, on ARM we must always generate a load to a register.
+    // In the case where we require a target register, it is better to use GT_IND, since
+    // GT_NULLCHECK is a non-value node and would therefore require an internal register
+    // to use as the target. That is non-optimal because it will be modeled as conflicting
+    // with the source register(s).
+    // So, to summarize:
+    // - On ARM64, always use GT_NULLCHECK for a dead indirection.
+    // - On ARM, always use GT_IND.
+    // - On XARCH, use GT_IND if we have a contained address, and GT_NULLCHECK otherwise.
+    // In all cases, change the type to TYP_INT.
+    //
+    assert(ind->OperIs(GT_NULLCHECK, GT_IND, GT_BLK, GT_OBJ));
+
+    ind->gtType = TYP_INT;
+#ifdef TARGET_ARM64
+    bool useNullCheck = true;
+#elif TARGET_ARM
+    bool useNullCheck = false;
+#else  // TARGET_XARCH
+    bool useNullCheck = !ind->Addr()->isContained();
+#endif // !TARGET_XARCH
+
+    if (useNullCheck && !ind->OperIs(GT_NULLCHECK))
+    {
+        comp->gtChangeOperToNullCheck(ind, block);
+        ind->ClearUnusedValue();
+    }
+    else if (!useNullCheck && !ind->OperIs(GT_IND))
+    {
+        ind->ChangeOper(GT_IND);
+        ind->SetUnusedValue();
     }
 }
 

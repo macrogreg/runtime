@@ -4,6 +4,7 @@
 using System.Globalization;
 using System.Net.Security;
 using System.Collections.Generic;
+using System.Runtime.Versioning;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading;
@@ -18,7 +19,7 @@ namespace System.Net.Http
 #else
         private readonly SocketsHttpHandler _underlyingHandler;
 #endif
-        private readonly DiagnosticsHandler _diagnosticsHandler;
+        private readonly DiagnosticsHandler? _diagnosticsHandler;
         private ClientCertificateOption _clientCertificateOptions;
 
         private volatile bool _disposed;
@@ -30,7 +31,10 @@ namespace System.Net.Http
 #else
             _underlyingHandler = new SocketsHttpHandler();
 #endif
-            _diagnosticsHandler = new DiagnosticsHandler(_underlyingHandler);
+            if (DiagnosticsHandler.IsGloballyEnabled())
+            {
+                _diagnosticsHandler = new DiagnosticsHandler(_underlyingHandler);
+            }
             ClientCertificateOptions = ClientCertificateOption.Manual;
         }
 
@@ -45,16 +49,18 @@ namespace System.Net.Http
             base.Dispose(disposing);
         }
 
-        public virtual bool SupportsAutomaticDecompression => true;
-        public virtual bool SupportsProxy => true;
-        public virtual bool SupportsRedirectConfiguration => true;
+        public virtual bool SupportsAutomaticDecompression => _underlyingHandler.SupportsAutomaticDecompression;
+        public virtual bool SupportsProxy => _underlyingHandler.SupportsProxy;
+        public virtual bool SupportsRedirectConfiguration => _underlyingHandler.SupportsRedirectConfiguration;
 
+        [UnsupportedOSPlatform("browser")]
         public bool UseCookies
         {
             get => _underlyingHandler.UseCookies;
             set => _underlyingHandler.UseCookies = value;
         }
 
+        [UnsupportedOSPlatform("browser")]
         public CookieContainer CookieContainer
         {
             get => _underlyingHandler.CookieContainer;
@@ -69,36 +75,42 @@ namespace System.Net.Http
             }
         }
 
+        [UnsupportedOSPlatform("browser")]
         public DecompressionMethods AutomaticDecompression
         {
             get => _underlyingHandler.AutomaticDecompression;
             set => _underlyingHandler.AutomaticDecompression = value;
         }
 
+        [UnsupportedOSPlatform("browser")]
         public bool UseProxy
         {
             get => _underlyingHandler.UseProxy;
             set => _underlyingHandler.UseProxy = value;
         }
 
+        [UnsupportedOSPlatform("browser")]
         public IWebProxy? Proxy
         {
             get => _underlyingHandler.Proxy;
             set => _underlyingHandler.Proxy = value;
         }
 
+        [UnsupportedOSPlatform("browser")]
         public ICredentials? DefaultProxyCredentials
         {
             get => _underlyingHandler.DefaultProxyCredentials;
             set => _underlyingHandler.DefaultProxyCredentials = value;
         }
 
+        [UnsupportedOSPlatform("browser")]
         public bool PreAuthenticate
         {
             get => _underlyingHandler.PreAuthenticate;
             set => _underlyingHandler.PreAuthenticate = value;
         }
 
+        [UnsupportedOSPlatform("browser")]
         public bool UseDefaultCredentials
         {
             // SocketsHttpHandler doesn't have a separate UseDefaultCredentials property.  There
@@ -121,6 +133,7 @@ namespace System.Net.Http
             }
         }
 
+        [UnsupportedOSPlatform("browser")]
         public ICredentials? Credentials
         {
             get => _underlyingHandler.Credentials;
@@ -133,12 +146,14 @@ namespace System.Net.Http
             set => _underlyingHandler.AllowAutoRedirect = value;
         }
 
+        [UnsupportedOSPlatform("browser")]
         public int MaxAutomaticRedirections
         {
             get => _underlyingHandler.MaxAutomaticRedirections;
             set => _underlyingHandler.MaxAutomaticRedirections = value;
         }
 
+        [UnsupportedOSPlatform("browser")]
         public int MaxConnectionsPerServer
         {
             get => _underlyingHandler.MaxConnectionsPerServer;
@@ -178,6 +193,7 @@ namespace System.Net.Http
             }
         }
 
+        [UnsupportedOSPlatform("browser")]
         public int MaxResponseHeadersLength
         {
             get => _underlyingHandler.MaxResponseHeadersLength;
@@ -217,6 +233,7 @@ namespace System.Net.Http
             }
         }
 
+        [UnsupportedOSPlatform("browser")]
         public X509CertificateCollection ClientCertificates
         {
             get
@@ -231,6 +248,7 @@ namespace System.Net.Http
             }
         }
 
+        [UnsupportedOSPlatform("browser")]
         public Func<HttpRequestMessage, X509Certificate2?, X509Chain?, SslPolicyErrors, bool>? ServerCertificateCustomValidationCallback
         {
 #if TARGETS_BROWSER
@@ -248,6 +266,7 @@ namespace System.Net.Http
 #endif
         }
 
+        [UnsupportedOSPlatform("browser")]
         public bool CheckCertificateRevocationList
         {
             get => _underlyingHandler.SslOptions.CertificateRevocationCheckMode == X509RevocationMode.Online;
@@ -258,6 +277,7 @@ namespace System.Net.Http
             }
         }
 
+        [UnsupportedOSPlatform("browser")]
         public SslProtocols SslProtocols
         {
             get => _underlyingHandler.SslOptions.EnabledSslProtocols;
@@ -273,7 +293,7 @@ namespace System.Net.Http
         protected internal override HttpResponseMessage Send(HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
-            return DiagnosticsHandler.IsEnabled() ?
+            return DiagnosticsHandler.IsEnabled() && _diagnosticsHandler != null ?
                 _diagnosticsHandler.Send(request, cancellationToken) :
                 _underlyingHandler.Send(request, cancellationToken);
         }
@@ -281,7 +301,7 @@ namespace System.Net.Http
         protected internal override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
-            return DiagnosticsHandler.IsEnabled() ?
+            return DiagnosticsHandler.IsEnabled() && _diagnosticsHandler != null ?
                 _diagnosticsHandler.SendAsync(request, cancellationToken) :
                 _underlyingHandler.SendAsync(request, cancellationToken);
         }

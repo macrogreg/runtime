@@ -18,7 +18,6 @@ namespace System.Runtime.Loader.Tests
         private const string TestAssemblyNotSupported = "System.Runtime.Loader.Test.AssemblyNotSupported";
 
         [Fact]
-        [ActiveIssue("https://github.com/dotnet/runtime/issues/39379", TestPlatforms.Browser)]
         public static void GetAssemblyNameTest_ValidAssembly()
         {
             var expectedName = typeof(AssemblyLoadContextTest).Assembly.GetName();
@@ -106,6 +105,7 @@ namespace System.Runtime.Loader.Tests
         }
 
         [Fact]
+        [PlatformSpecific(~TestPlatforms.Browser)] // Corelib does not exist on disc for Browser builds
         public static void LoadFromAssemblyName_ValidTrustedPlatformAssembly()
         {
             var asmName = typeof(System.Linq.Enumerable).Assembly.GetName();
